@@ -1,0 +1,12 @@
+# Environment — NEVER push private keys
+.env
+*.env
+
+# Foundry build artifacts
+cache/
+out/
+broadcast/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+{
+  "name": "harvester",
+  "version": "1.0.0",
+  "description": "FlowStock keeper bot — buys stocks and distributes to holders",
+  "main": "harvester.js",
+  "scripts": {
+    "start": "node harvester.js"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0",
+    "dotenv": "^16.0.0"
+  }
+}
