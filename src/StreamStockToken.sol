@@ -4,10 +4,14 @@ pragma solidity ^0.8.26;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract FlowStockToken is ERC20, Ownable {
+/// @title StreamStockToken
+/// @notice $STREAM ERC20 with automatic holder tracking.
+/// Every address holding >= minShareBalance is tracked in _holders[]
+/// and receives pro-rata tokenized stock distributions every 15 minutes.
+contract StreamStockToken is ERC20, Ownable {
 
-    uint256 public constant TOTAL_SUPPLY = 1_000_000_000e18;
-    uint256 public minShareBalance = 10_000e18;
+    uint256 public constant TOTAL_SUPPLY = 1_000_000_000e18; // 1 billion
+    uint256 public minShareBalance = 10_000e18;              // 10,000 STREAM minimum
 
     mapping(address => bool) public rewardsExcluded;
 
@@ -21,13 +25,17 @@ contract FlowStockToken is ERC20, Ownable {
 
     error ZeroAddress();
 
+    // ── FOR TEST DEPLOY: use ERC20("TestStream", "TEST") first ──────────────
+    // ── FOR REAL LAUNCH: use ERC20("StockStream", "STREAM") ─────────────────
     constructor(address poolManager) ERC20("StockStream", "STREAM") Ownable(msg.sender) {
         if (poolManager == address(0)) revert ZeroAddress();
-        rewardsExcluded[poolManager] = true;
-        rewardsExcluded[address(0xdead)] = true;
-        rewardsExcluded[address(0)] = true;
+        rewardsExcluded[poolManager]      = true; // pool excluded from holder tracking
+        rewardsExcluded[address(0xdead)]  = true; // burn address excluded
+        rewardsExcluded[address(0)]       = true; // zero address excluded
         _mint(msg.sender, TOTAL_SUPPLY);
     }
+
+    // ── Owner functions ──────────────────────────────────────────────────────
 
     function setMinShareBalance(uint256 v) external onlyOwner {
         emit MinShareBalanceSet(minShareBalance, v);
@@ -42,6 +50,8 @@ contract FlowStockToken is ERC20, Ownable {
         emit RewardsExcludedSet(a, on);
     }
 
+    // ── Views ────────────────────────────────────────────────────────────────
+
     function holderCount() external view returns (uint256) {
         return _holders.length;
     }
@@ -50,10 +60,12 @@ contract FlowStockToken is ERC20, Ownable {
         return _holders[i];
     }
 
+    // ── Internal ─────────────────────────────────────────────────────────────
+
     function _update(address from, address to, uint256 amount) internal override {
         super._update(from, to, amount);
         if (from != address(0)) _refreshHolder(from);
-        if (to != address(0) && to != from) _refreshHolder(to);
+        if (to   != address(0) && to != from) _refreshHolder(to);
     }
 
     function _refreshHolder(address a) private {
@@ -73,7 +85,7 @@ contract FlowStockToken is ERC20, Ownable {
     function _removeHolder(address a, uint256 idx) private {
         address last = _holders[_holders.length - 1];
         _holders[idx - 1] = last;
-        _holderIdx[last] = idx;
+        _holderIdx[last]  = idx;
         _holders.pop();
         _holderIdx[a] = 0;
         emit HolderRemoved(a);

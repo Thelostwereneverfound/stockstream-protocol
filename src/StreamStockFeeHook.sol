@@ -11,15 +11,18 @@ import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 
-/// @title FlowStockFeeHook
-/// @notice Takes a 3% native-ETH fee on both directions of the ETH/FLST
-/// Uniswap v4 pool and forwards it to StockTreasury, which buys tokenized
+/// @title StreamStockFeeHook
+/// @notice Takes a 1% native-ETH fee on both directions of the ETH/STREAM
+/// Uniswap V4 pool and forwards it to StockTreasury, which buys tokenized
 /// stocks and sends them to StockDistributor for pro-rata payout to holders.
-contract FlowStockFeeHook is BaseHook {
+/// @dev Hook address MUST end in 0xCC (= 204). Mine a CREATE2 salt to achieve this.
+///      Permission flags: beforeSwap(128) + afterSwap(64) +
+///                        beforeSwapReturnDelta(8) + afterSwapReturnDelta(4) = 204 = 0xCC
+contract StreamStockFeeHook is BaseHook {
     using SafeCast for uint256;
 
-    uint256 public constant FEE_BPS = 300; // 3%
-    uint256 internal constant BPS = 10_000;
+    uint256 public constant FEE_BPS = 100;    // 1% fee
+    uint256 internal constant BPS   = 10_000;
 
     address public immutable treasury;
 
@@ -30,24 +33,28 @@ contract FlowStockFeeHook is BaseHook {
         treasury = treasury_;
     }
 
+    // ── Hook permissions ─────────────────────────────────────────────────────
+
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
-            beforeInitialize: false,
-            afterInitialize: false,
-            beforeAddLiquidity: false,
-            afterAddLiquidity: false,
-            beforeRemoveLiquidity: false,
-            afterRemoveLiquidity: false,
-            beforeSwap: true,
-            afterSwap: true,
-            beforeDonate: false,
-            afterDonate: false,
-            beforeSwapReturnDelta: true,
-            afterSwapReturnDelta: true,
-            afterAddLiquidityReturnDelta: false,
+            beforeInitialize:              false,
+            afterInitialize:               false,
+            beforeAddLiquidity:            false,
+            afterAddLiquidity:             false,
+            beforeRemoveLiquidity:         false,
+            afterRemoveLiquidity:          false,
+            beforeSwap:                    true,
+            afterSwap:                     true,
+            beforeDonate:                  false,
+            afterDonate:                   false,
+            beforeSwapReturnDelta:         true,
+            afterSwapReturnDelta:          true,
+            afterAddLiquidityReturnDelta:  false,
             afterRemoveLiquidityReturnDelta: false
         });
     }
+
+    // ── Required overrides (no-op) ───────────────────────────────────────────
 
     function afterAddLiquidity(
         address,
@@ -71,16 +78,21 @@ contract FlowStockFeeHook is BaseHook {
         return (IHooks.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
+    // ── Fee logic ────────────────────────────────────────────────────────────
+
+    /// @dev Returns true when the swap amount is specified in ETH terms.
     function _ethSpecified(SwapParams calldata p) internal pure returns (bool) {
         return (p.amountSpecified < 0) == p.zeroForOne;
     }
 
+    /// @dev Runs before swap. Captures 1% fee when ETH is the input token.
     function _beforeSwap(
         address,
         PoolKey calldata key,
         SwapParams calldata params,
         bytes calldata
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+        // Only act on ETH-input swaps (currency0 = native ETH, amount specified in ETH)
         if (!key.currency0.isAddressZero() || !_ethSpecified(params)) {
             return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
@@ -94,6 +106,7 @@ contract FlowStockFeeHook is BaseHook {
         return (this.beforeSwap.selector, toBeforeSwapDelta(fee.toInt128(), 0), 0);
     }
 
+    /// @dev Runs after swap. Captures 1% fee when ETH is the output token.
     function _afterSwap(
         address,
         PoolKey calldata key,
@@ -101,10 +114,11 @@ contract FlowStockFeeHook is BaseHook {
         BalanceDelta delta,
         bytes calldata
     ) internal override returns (bytes4, int128) {
+        // Only act on ETH-output swaps
         if (!key.currency0.isAddressZero() || _ethSpecified(params)) {
             return (this.afterSwap.selector, 0);
         }
-        int128 a0 = delta.amount0();
+        int128 a0  = delta.amount0();
         uint256 amt = a0 < 0 ? uint256(uint128(-a0)) : uint256(uint128(a0));
         uint256 fee = (amt * FEE_BPS) / BPS;
         if (fee == 0) return (this.afterSwap.selector, 0);

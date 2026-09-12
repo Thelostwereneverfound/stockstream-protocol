@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {FlowStockToken} from "../src/FlowStockToken.sol";
+import {StreamStockToken} from "../src/StreamStockToken.sol";
 import {StockTreasury} from "../src/StockTreasury.sol";
 import {StockDistributor} from "../src/StockDistributor.sol";
 
@@ -21,8 +21,8 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
-        FlowStockToken token = new FlowStockToken(POOL_MANAGER);
-        console.log("FlowStockToken deployed:", address(token));
+        StreamStockToken token = new StreamStockToken(POOL_MANAGER);
+        console.log("StreamStockToken deployed:", address(token));
 
         StockTreasury treasury = new StockTreasury(
             IPoolManager(POOL_MANAGER),

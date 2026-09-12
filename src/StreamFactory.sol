@@ -3,27 +3,26 @@ pragma solidity ^0.8.26;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {FlowStockFeeHook} from "./FlowStockFeeHook.sol";
+import {StreamStockFeeHook} from "./StreamStockFeeHook.sol";
 import {StockTreasury} from "./StockTreasury.sol";
 import {StockDistributor} from "./StockDistributor.sol";
 
 /// @title StreamFactory
-/// @notice Deploys a complete dividend system for any token on Robinhood Chain
-/// in one transaction. 0.5% of all distributions flow to $STREAM treasury.
+/// @notice Deploys a complete tokenized stock distribution system for any token
+/// on Robinhood Chain in one transaction. 0.5% of all distributions flow to
+/// the $STREAM treasury.
 contract StreamFactory is Ownable {
 
-    // ── Immutables ─────────────────────────────────────────────────────────
+    // ── Immutables ───────────────────────────────────────────────────────────
     IPoolManager public immutable poolManager;
     address public immutable streamTreasury; // $STREAM treasury receives 0.5%
 
-    // ── Constants ──────────────────────────────────────────────────────────
-    uint256 public constant PROTOCOL_FEE_BPS = 50; // 0.5%
-
-    // ── Stock defaults ─────────────────────────────────────────────────────
-    uint24  public constant DEFAULT_STOCK_FEE          = 3000;
+    // ── Constants ────────────────────────────────────────────────────────────
+    uint256 public constant PROTOCOL_FEE_BPS       = 50;   // 0.5%
+    uint24  public constant DEFAULT_STOCK_FEE       = 3000; // 0.3% V4 pool fee
     int24   public constant DEFAULT_STOCK_TICK_SPACING = 60;
 
-    // ── Deployment registry ────────────────────────────────────────────────
+    // ── Deployment registry ──────────────────────────────────────────────────
     struct Deployment {
         address token;
         address hook;
@@ -33,10 +32,10 @@ contract StreamFactory is Ownable {
         uint256 deployedAt;
     }
 
-    mapping(address => Deployment) public deployments; // token → deployment
+    mapping(address => Deployment) public deployments; // token => deployment
     address[] public allTokens;
 
-    // ── Events ─────────────────────────────────────────────────────────────
+    // ── Events ───────────────────────────────────────────────────────────────
     event Deployed(
         address indexed token,
         address indexed hook,
@@ -45,27 +44,27 @@ contract StreamFactory is Ownable {
         address deployer
     );
 
-    // ── Errors ─────────────────────────────────────────────────────────────
+    // ── Errors ───────────────────────────────────────────────────────────────
     error ZeroAddress();
     error AlreadyDeployed();
     error NoStocks();
-    error LengthMismatch();
 
     constructor(
         address poolManager_,
         address streamTreasury_,
         address owner_
     ) Ownable(owner_) {
-        if (poolManager_ == address(0)) revert ZeroAddress();
+        if (poolManager_    == address(0)) revert ZeroAddress();
         if (streamTreasury_ == address(0)) revert ZeroAddress();
-        poolManager = IPoolManager(poolManager_);
+        poolManager    = IPoolManager(poolManager_);
         streamTreasury = streamTreasury_;
     }
 
-    /// @notice Deploy a complete dividend system for any token
-    /// @param token        The token whose holders will earn stocks
-    /// @param stocks       Stock token addresses to distribute
-    /// @param hookSalt     Pre-mined CREATE2 salt for hook deployment
+    /// @notice Deploy a complete distribution system for any token.
+    /// @param token     The token whose holders will earn tokenized stocks.
+    /// @param stocks    Stock token addresses to distribute.
+    /// @param hookSalt  Pre-mined CREATE2 salt for hook deployment.
+    ///                  Mine using StreamFactory address as deployer.
     function deploy(
         address token,
         address[] calldata stocks,
@@ -75,52 +74,53 @@ contract StreamFactory is Ownable {
         address treasury,
         address distributor
     ) {
-        if (token == address(0)) revert ZeroAddress();
-        if (stocks.length == 0) revert NoStocks();
+        if (token == address(0))             revert ZeroAddress();
+        if (stocks.length == 0)              revert NoStocks();
         if (deployments[token].hook != address(0)) revert AlreadyDeployed();
 
-        // ── Step 1: Deploy treasury ────────────────────────────────────────
+        // Step 1: Deploy treasury (factory owns temporarily)
         StockTreasury _treasury = new StockTreasury(
             poolManager,
-            address(this) // factory owns it temporarily
+            address(this)
         );
 
-        // ── Step 2: Deploy distributor ─────────────────────────────────────
+        // Step 2: Deploy distributor (factory owns temporarily)
         StockDistributor _distributor = new StockDistributor(
             token,
-            address(this) // factory owns it temporarily
+            address(this)
         );
 
-        // ── Step 3: Deploy hook with pre-mined salt ────────────────────────
-        FlowStockFeeHook _hook = new FlowStockFeeHook{salt: hookSalt}(
+        // Step 3: Deploy hook with pre-mined CREATE2 salt
+        // IMPORTANT: deployer in MineHook must be THIS factory address, not Create2Deployer
+        StreamStockFeeHook _hook = new StreamStockFeeHook{salt: hookSalt}(
             poolManager,
             address(_treasury)
         );
 
-        // ── Step 4: Add stocks to treasury and distributor ─────────────────
+        // Step 4: Add stocks to treasury and distributor
         for (uint256 i; i < stocks.length; ++i) {
             _treasury.addStock(
                 stocks[i],
                 DEFAULT_STOCK_FEE,
                 DEFAULT_STOCK_TICK_SPACING,
-                address(0)
+                address(0) // no hook on stock pools
             );
             _distributor.addStock(stocks[i]);
         }
 
-        // ── Step 5: Wire everything ────────────────────────────────────────
+        // Step 5: Wire contracts together
         _treasury.setDistributor(address(_distributor));
         _treasury.setKeeper(msg.sender, true);
         _distributor.setKeeper(msg.sender, true);
 
-        // ── Step 6: Set 0.5% protocol fee → $STREAM treasury ──────────────
+        // Step 6: Set 0.5% protocol fee to $STREAM treasury
         _treasury.setProtocolFee(streamTreasury, PROTOCOL_FEE_BPS);
 
-        // ── Step 7: Transfer ownership to caller ───────────────────────────
+        // Step 7: Transfer ownership to caller
         _treasury.transferOwnership(msg.sender);
         _distributor.transferOwnership(msg.sender);
 
-        // ── Step 8: Register deployment ────────────────────────────────────
+        // Step 8: Register deployment
         treasury    = address(_treasury);
         distributor = address(_distributor);
         hook        = address(_hook);
@@ -138,7 +138,8 @@ contract StreamFactory is Ownable {
         emit Deployed(token, hook, treasury, distributor, msg.sender);
     }
 
-    // ── Views ──────────────────────────────────────────────────────────────
+    // ── Views ────────────────────────────────────────────────────────────────
+
     function totalDeployments() external view returns (uint256) {
         return allTokens.length;
     }
